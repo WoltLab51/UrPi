@@ -51,7 +51,35 @@ curl -X POST http://localhost:8001/echo \
 # → {"output": "Hallo Ur-PiGenus!"}
 ```
 
-### 5. Redis/Qdrant starten (optional)
+### 5. Pi5-Deploy-Verifikation
+Nach dem Deployment können Sie die vollständige Funktionalität mit dieser Sequenz testen:
+```bash
+# 1. Docker-Container starten
+docker compose up -d
+
+# 2. Health-Check
+curl http://localhost:8000/health
+
+# 3. Task erstellen
+curl -X POST http://localhost:8000/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Echo testen","description":"Teste Echo"}'
+
+# 4. Memory-Eintrag erstellen
+curl -X POST http://localhost:8000/memory \
+  -H "Content-Type: application/json" \
+  -d '{"content":"Deploy-Test","type":"system","metadata":{"source":"pi5_check"}}'
+
+# 5. Echo-Modul testen
+curl -X POST http://localhost:8001/echo \
+  -H "Content-Type: application/json" \
+  -d '{"input":"Hallo Pi5"}'
+
+# 6. Tests ausführen
+pytest
+```
+
+### 6. Redis/Qdrant starten (optional)
 ```bash
 docker compose --profile redis --profile qdrant up -d
 ```
