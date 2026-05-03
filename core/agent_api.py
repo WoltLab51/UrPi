@@ -123,8 +123,8 @@ class MemoryEntry(BaseModel):
 
 class Agent(BaseModel):
     name: str
-    role: str
-    capabilities: List[str]
+    role: str = ""
+    capabilities: List[str] = Field(default_factory=list)
 
 class AgentRegisterResponse(BaseModel):
     status: str
@@ -298,13 +298,15 @@ def register_module(module: Dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Modul konnte nicht registriert werden: {e}")
 
+_registered_agents: List[dict] = []
+
 @app.get("/agents", response_model=List[Agent])
 def get_agents():
-    return DEFAULT_AGENTS
+    return DEFAULT_AGENTS + _registered_agents
 
 @app.post("/agents/register", response_model=AgentRegisterResponse, status_code=status.HTTP_201_CREATED)
 def register_agent(agent: Agent):
-    DEFAULT_AGENTS.append(agent.model_dump())
+    _registered_agents.append(agent.model_dump())
     return AgentRegisterResponse(status="registered", agent=agent)
 
 @app.get("/health", response_model=HealthResponse)

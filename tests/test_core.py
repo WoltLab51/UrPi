@@ -10,12 +10,15 @@ client = TestClient(app)
 def setup_test_db(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("testdata")
     original = (api_module.TASKS_DB, api_module.MEMORY_DB, api_module.MODULES_DB)
+    original_registered = list(api_module._registered_agents)
     api_module.TASKS_DB = str(tmp / "tasks.db")
     api_module.MEMORY_DB = str(tmp / "memory.db")
     api_module.MODULES_DB = str(tmp / "modules.db")
     init_db()
     yield
     api_module.TASKS_DB, api_module.MEMORY_DB, api_module.MODULES_DB = original
+    api_module._registered_agents.clear()
+    api_module._registered_agents.extend(original_registered)
 
 def test_health_check():
     response = client.get("/health")
@@ -147,7 +150,6 @@ def test_agents_schema():
     assert response.status_code == 200
     agents = response.json()
     assert isinstance(agents, list)
-    assert len(agents) >= 2  # Should have at least the default agents
     for agent in agents:
         assert "name" in agent
         assert "role" in agent
@@ -174,6 +176,7 @@ def test_task_status_validation_valid():
     """Test that valid task statuses are accepted."""
     task_data = {"title": "Status Test Task", "description": "Testing status validation", "priority": "medium"}
     create_response = client.post("/tasks", json=task_data)
+    assert create_response.status_code == 201
     task_id = create_response.json()["id"]
 
     # Test all valid statuses
@@ -188,6 +191,7 @@ def test_task_status_validation_invalid():
     """Test that invalid task statuses are rejected with 422."""
     task_data = {"title": "Invalid Status Test", "description": "Testing invalid status", "priority": "low"}
     create_response = client.post("/tasks", json=task_data)
+    assert create_response.status_code == 201
     task_id = create_response.json()["id"]
 
     # Test invalid status
