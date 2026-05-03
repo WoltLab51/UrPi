@@ -1,12 +1,12 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 import json
 import sqlite3
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from .config import TASKS_DB, MEMORY_DB, MODULES_DB, DEFAULT_AGENTS
 
 # --- Datenbank-Initialisierung ---
@@ -104,7 +104,7 @@ class TaskUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     priority: Optional[str] = None
-    status: Optional[str] = None
+    status: Optional[Literal["open", "in_progress", "done", "failed"]] = None
     assignee: Optional[str] = None
     acceptance_criteria: Optional[List[str]] = None
     dependencies: Optional[List[str]] = None
@@ -120,6 +120,26 @@ class MemoryEntry(BaseModel):
     content: str
     type: str = "long_term"
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class Agent(BaseModel):
+    name: str
+    role: str
+    capabilities: List[str]
+
+class AgentRegisterResponse(BaseModel):
+    status: str
+    agent: Agent
+
+class HealthResponse(BaseModel):
+    status: str
+    version: str
+    workers: int
+
+class RootResponse(BaseModel):
+    name: str
+    version: str
+    docs: str
+    health: str
 
 # --- Task-Endpunkte ---
 @app.get("/tasks", response_model=List[Task])
@@ -140,7 +160,7 @@ def create_task(task: TaskCreate):
     try:
         conn = sqlite3.connect(TASKS_DB)
         cursor = conn.cursor()
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         task_id = str(uuid.uuid4())
         cursor.execute("""
             INSERT INTO tasks (id, title, description, priority, status, assignee, acceptance_criteria, dependencies, created_at, updated_at)
@@ -192,7 +212,7 @@ def update_task(task_id: str, task_update: TaskUpdate):
         current_task_dict = _parse_task(dict(zip(columns, current_task)))
         updates = task_update.model_dump(exclude_unset=True, exclude_none=True)
         updated_task = {**current_task_dict, **updates}
-        updated_task["updated_at"] = datetime.utcnow().isoformat()
+        updated_task["updated_at"] = datetime.now(timezone.utc).isoformat()
         cursor.execute("""
             UPDATE tasks
             SET title = ?, description = ?, priority = ?, status = ?, assignee = ?, acceptance_criteria = ?, dependencies = ?, updated_at = ?
@@ -233,7 +253,7 @@ def add_memory(entry: MemoryEntry):
     try:
         conn = sqlite3.connect(MEMORY_DB)
         cursor = conn.cursor()
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         cursor.execute("""
             INSERT INTO memory (id, content, type, timestamp, metadata)
             VALUES (?, ?, ?, ?, ?)
@@ -263,7 +283,7 @@ def register_module(module: Dict):
     try:
         conn = sqlite3.connect(MODULES_DB)
         cursor = conn.cursor()
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         module_id = str(uuid.uuid4())
         cursor.execute("""
             INSERT INTO modules (id, name, version, description, capabilities, api_endpoint, is_active, registered_at)
@@ -278,15 +298,24 @@ def register_module(module: Dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Modul konnte nicht registriert werden: {e}")
 
-@app.get("/agents")
+@app.get("/agents", response_model=List[Agent])
 def get_agents():
     return DEFAULT_AGENTS
 
-@app.post("/agents/register")
-def register_agent(agent: Dict):
-    DEFAULT_AGENTS.append(agent)
-    return {"status": "registered", "agent": agent}
+@app.post("/agents/register", response_model=AgentRegisterResponse, status_code=status.HTTP_201_CREATED)
+def register_agent(agent: Agent):
+    DEFAULT_AGENTS.append(agent.model_dump())
+    return AgentRegisterResponse(status="registered", agent=agent)
 
-@app.get("/health")
+@app.get("/health", response_model=HealthResponse)
 def health_check():
-    return {"status": "healthy", "version": "0.1.0", "workers": 1}
+    return HealthResponse(status="healthy", version="0.1.0", workers=1)
+
+@app.get("/", response_model=RootResponse)
+def root():
+    return RootResponse(
+        name="Ur-PiGenus",
+        version="0.1.0",
+        docs="/docs",
+        health="/health"
+    )
