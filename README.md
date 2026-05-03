@@ -79,7 +79,7 @@ docker compose --profile redis --profile qdrant up -d
 | `/tasks` | GET | Liste aller Tasks | 200 |
 | `/tasks` | POST | Task erstellen | 201 |
 | `/tasks/{id}` | PUT | Task aktualisieren | 200/404 |
-| `/tasks/next` | GET | Nächster offener Task | 200/404 |
+| `/tasks/next` | GET | Nächster offener Task (null wenn keiner) | 200 |
 | `/memory` | GET/POST | Gedächtnis | 200/201 |
 | `/modules` | GET | Liste aller Module | 200 |
 | `/health` | GET | Health-Check | 200 |

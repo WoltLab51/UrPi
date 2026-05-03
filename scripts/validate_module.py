@@ -24,4 +24,5 @@ if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Verwendung: python validate_module.py <pfad/zur/module.yaml>")
         sys.exit(1)
-    validate_module(sys.argv[1])
+    if not validate_module(sys.argv[1]):
+        sys.exit(1)

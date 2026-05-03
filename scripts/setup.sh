@@ -48,7 +48,7 @@ else
 fi
 
 echo -e "${YELLOW}5. Initialisiere Datenbanken...${NC}"
-if ! python3 -c "from core.memory_manager import init_db; init_db()"; then
+if ! python3 -c "from core.agent_api import init_db; init_db()"; then
     echo -e "${RED}❌ Datenbank-Initialisierung fehlgeschlagen!${NC}"
     exit 1
 fi

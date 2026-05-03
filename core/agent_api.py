@@ -1,17 +1,13 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
+import json
 import sqlite3
 import os
 import uuid
 from datetime import datetime
 from .config import TASKS_DB, MEMORY_DB, MODULES_DB, DEFAULT_AGENTS
-
-app = FastAPI(
-    title="Ur-PiGenus v0.1 API",
-    description="Orchestrator für GENUS: Tasks, Memory, Module.",
-    version="0.1.0"
-)
 
 # --- Datenbank-Initialisierung ---
 def init_db():
@@ -63,7 +59,39 @@ def init_db():
     except Exception as e:
         raise RuntimeError(f"Datenbank-Initialisierung fehlgeschlagen: {e}")
 
-# --- Modelle ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+app = FastAPI(
+    title="Ur-PiGenus v0.1 API",
+    description="Orchestrator für GENUS: Tasks, Memory, Module.",
+    version="0.1.0",
+    lifespan=lifespan
+)
+
+# --- Hilfsfunktionen ---
+def _parse_task(row: dict) -> dict:
+    """Parse JSON fields from a task row."""
+    for field in ("acceptance_criteria", "dependencies"):
+        if isinstance(row.get(field), str):
+            try:
+                row[field] = json.loads(row[field])
+            except (json.JSONDecodeError, TypeError):
+                row[field] = []
+    return row
+
+def _parse_memory_entry(row: dict) -> dict:
+    """Parse JSON fields from a memory row."""
+    if isinstance(row.get("metadata"), str):
+        try:
+            row["metadata"] = json.loads(row["metadata"])
+        except (json.JSONDecodeError, TypeError):
+            row["metadata"] = {}
+    return row
+
+
 class TaskCreate(BaseModel):
     title: str
     description: str
@@ -101,7 +129,7 @@ def get_tasks():
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM tasks")
         columns = [col[0] for col in cursor.description]
-        tasks = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        tasks = [_parse_task(dict(zip(columns, row))) for row in cursor.fetchall()]
         conn.close()
         return tasks
     except Exception as e:
@@ -119,7 +147,7 @@ def create_task(task: TaskCreate):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             task_id, task.title, task.description, task.priority, "open",
-            task.assignee, str(task.acceptance_criteria), str(task.dependencies), now, now
+            task.assignee, json.dumps(task.acceptance_criteria), json.dumps(task.dependencies), now, now
         ))
         conn.commit()
         conn.close()
@@ -137,11 +165,16 @@ def get_next_task():
     try:
         conn = sqlite3.connect(TASKS_DB)
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM tasks WHERE status = 'open' ORDER BY priority DESC, created_at ASC LIMIT 1")
+        cursor.execute("""
+            SELECT * FROM tasks WHERE status = 'open'
+            ORDER BY CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
+                     created_at ASC
+            LIMIT 1
+        """)
         columns = [col[0] for col in cursor.description]
         task = cursor.fetchone()
         conn.close()
-        return dict(zip(columns, task)) if task else None
+        return _parse_task(dict(zip(columns, task))) if task else None
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Datenbankfehler: {e}")
 
@@ -156,8 +189,9 @@ def update_task(task_id: str, task_update: TaskUpdate):
             conn.close()
             raise HTTPException(status_code=404, detail="Task not found")
         columns = [col[0] for col in cursor.description]
-        current_task_dict = dict(zip(columns, current_task))
-        updated_task = {**current_task_dict, **task_update.dict(exclude_unset=True)}
+        current_task_dict = _parse_task(dict(zip(columns, current_task)))
+        updates = task_update.model_dump(exclude_unset=True, exclude_none=True)
+        updated_task = {**current_task_dict, **updates}
         updated_task["updated_at"] = datetime.utcnow().isoformat()
         cursor.execute("""
             UPDATE tasks
@@ -165,14 +199,18 @@ def update_task(task_id: str, task_update: TaskUpdate):
             WHERE id = ?
         """, (
             updated_task["title"], updated_task["description"], updated_task["priority"],
-            updated_task["status"], updated_task["assignee"], str(updated_task["acceptance_criteria"]),
-            str(updated_task["dependencies"]), updated_task["updated_at"], task_id
+            updated_task["status"], updated_task["assignee"],
+            json.dumps(updated_task["acceptance_criteria"]),
+            json.dumps(updated_task["dependencies"]),
+            updated_task["updated_at"], task_id
         ))
         conn.commit()
         cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
-        updated_task = dict(zip(columns, cursor.fetchone()))
+        result = _parse_task(dict(zip(columns, cursor.fetchone())))
         conn.close()
-        return updated_task
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Task konnte nicht aktualisiert werden: {e}")
 
@@ -184,7 +222,7 @@ def get_memory():
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM memory")
         columns = [col[0] for col in cursor.description]
-        entries = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        entries = [_parse_memory_entry(dict(zip(columns, row))) for row in cursor.fetchall()]
         conn.close()
         return entries
     except Exception as e:
@@ -199,7 +237,7 @@ def add_memory(entry: MemoryEntry):
         cursor.execute("""
             INSERT INTO memory (id, content, type, timestamp, metadata)
             VALUES (?, ?, ?, ?, ?)
-        """, (entry.id, entry.content, entry.type, now, str(entry.metadata)))
+        """, (entry.id, entry.content, entry.type, now, json.dumps(entry.metadata)))
         conn.commit()
         conn.close()
         return entry
