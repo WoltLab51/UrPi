@@ -1,0 +1,1105 @@
+Hier ist der **komplette Inhalt als ein durchgehender Textblock** zum Kopieren.
+Kopiere **alles von `=== START UR-PIGENUS V0.1 FINAL ===` bis `=== END UR-PIGENUS V0.1 FINAL ===`** in eine neue `.txt`-Datei (z. B. `ur_pigenus_v01_final.txt`):
+
+---
+
+```
+=== START UR-PIGENUS V0.1 FINAL ===
+
+---
+### 📌 ANWEISUNG FÜR GITHUB COPILOT:
+Erstelle ein GitHub-Repository namens "UrPi" unter dem Account "WoltLab51" mit folgender Struktur und allen Dateien.
+Das Repository muss 100% lauffähig sein und alle Fixes aus der Aufgabenbeschreibung enthalten.
+Verwende folgende Struktur und Inhalte:
+
+---
+
+### 📁 REPOSITORY-STRUKTUR (exakt so anlegen!)
+ur-pigenus/
+├── core/
+│   ├── __init__.py
+│   ├── agent_api.py
+│   ├── task_manager.py
+│   ├── memory_manager.py
+│   └── config.py
+│
+├── modules/
+│   └── echo/
+│       ├── module.yaml
+│       ├── main.py
+│       ├── Dockerfile
+│       ├── requirements.txt
+│       └── tests/
+│           └── test_echo.py
+│
+├── tests/
+│   └── test_core.py
+│
+├── data/
+│
+├── docker-compose.yml
+│
+├── scripts/
+│   ├── setup.sh
+│   ├── validate_module.py
+│   └── governance_bot.py
+│
+├── docs/
+│   ├── GENUS_MANIFEST.md
+│   ├── ARCHITECTURE.md
+│   ├── MODULE_CONTRACT.md
+│   └── ROADMAP.md
+│
+├── requirements.txt
+├── README.md
+└── .gitignore
+
+---
+
+### 📜 DATEI-INHALTE (1:1 kopieren!)
+
+---
+#### 1. core/__init__.py
+---
+# Ur-PiGenus Core Package
+
+---
+---
+#### 2. core/config.py
+---
+import os
+from pathlib import Path
+
+# Basisverzeichnis
+BASE_DIR = Path(__file__).parent.parent
+
+# Datenbankpfade
+TASKS_DB = os.path.join(BASE_DIR, "data", "tasks.db")
+MEMORY_DB = os.path.join(BASE_DIR, "data", "memory.db")
+MODULES_DB = os.path.join(BASE_DIR, "data", "modules.db")
+
+# Standard-Agenten
+DEFAULT_AGENTS = [
+    {"name": "Mistral Vibe", "role": "coding", "capabilities": ["code_generation", "testing"]},
+    {"name": "Devstral 2", "role": "automation", "capabilities": ["task_execution", "validation"]},
+]
+
+---
+---
+#### 3. core/agent_api.py
+---
+from fastapi import FastAPI, HTTPException, status
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any
+import sqlite3
+import os
+import uuid
+from datetime import datetime
+from .config import TASKS_DB, MEMORY_DB, MODULES_DB, DEFAULT_AGENTS
+
+app = FastAPI(
+    title="Ur-PiGenus v0.1 API",
+    description="Orchestrator für GENUS: Tasks, Memory, Module.",
+    version="0.1.0"
+)
+
+# --- Datenbank-Initialisierung ---
+def init_db():
+    try:
+        os.makedirs(os.path.dirname(TASKS_DB), exist_ok=True)
+        for db_path in [TASKS_DB, MEMORY_DB, MODULES_DB]:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            if "tasks" in str(db_path):
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS tasks (
+                        id TEXT PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        description TEXT,
+                        priority TEXT CHECK(priority IN ('high', 'medium', 'low')),
+                        status TEXT CHECK(status IN ('open', 'in_progress', 'done', 'failed')),
+                        assignee TEXT,
+                        acceptance_criteria TEXT,
+                        dependencies TEXT,
+                        created_at TIMESTAMP,
+                        updated_at TIMESTAMP
+                    )
+                """)
+            elif "memory" in str(db_path):
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS memory (
+                        id TEXT PRIMARY KEY,
+                        content TEXT NOT NULL,
+                        type TEXT CHECK(type IN ('short_term', 'long_term', 'system')),
+                        timestamp TIMESTAMP,
+                        metadata TEXT
+                    )
+                """)
+            elif "modules" in str(db_path):
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS modules (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        version TEXT NOT NULL,
+                        description TEXT,
+                        capabilities TEXT,
+                        api_endpoint TEXT NOT NULL,
+                        is_active BOOLEAN DEFAULT 1,
+                        registered_at TIMESTAMP
+                    )
+                """)
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        raise RuntimeError(f"Datenbank-Initialisierung fehlgeschlagen: {e}")
+
+# --- Modelle ---
+class TaskCreate(BaseModel):
+    title: str
+    description: str
+    priority: str = "medium"
+    assignee: Optional[str] = None
+    acceptance_criteria: List[str] = Field(default_factory=list)
+    dependencies: List[str] = Field(default_factory=list)
+
+class TaskUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    priority: Optional[str] = None
+    status: Optional[str] = None
+    assignee: Optional[str] = None
+    acceptance_criteria: Optional[List[str]] = None
+    dependencies: Optional[List[str]] = None
+
+class Task(TaskCreate):
+    id: str
+    status: str = "open"
+    created_at: str
+    updated_at: str
+
+class MemoryEntry(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    content: str
+    type: str = "long_term"
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+# --- Task-Endpunkte ---
+@app.get("/tasks", response_model=List[Task])
+def get_tasks():
+    try:
+        conn = sqlite3.connect(TASKS_DB)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM tasks")
+        columns = [col[0] for col in cursor.description]
+        tasks = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        conn.close()
+        return tasks
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Datenbankfehler: {e}")
+
+@app.post("/tasks", response_model=Task, status_code=status.HTTP_201_CREATED)
+def create_task(task: TaskCreate):
+    try:
+        conn = sqlite3.connect(TASKS_DB)
+        cursor = conn.cursor()
+        now = datetime.utcnow().isoformat()
+        task_id = str(uuid.uuid4())
+        cursor.execute("""
+            INSERT INTO tasks (id, title, description, priority, status, assignee, acceptance_criteria, dependencies, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            task_id, task.title, task.description, task.priority, "open",
+            task.assignee, str(task.acceptance_criteria), str(task.dependencies), now, now
+        ))
+        conn.commit()
+        conn.close()
+        return Task(
+            id=task_id, title=task.title, description=task.description,
+            priority=task.priority, status="open", assignee=task.assignee,
+            acceptance_criteria=task.acceptance_criteria, dependencies=task.dependencies,
+            created_at=now, updated_at=now
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Task konnte nicht erstellt werden: {e}")
+
+@app.get("/tasks/next", response_model=Optional[Task])
+def get_next_task():
+    try:
+        conn = sqlite3.connect(TASKS_DB)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM tasks WHERE status = 'open' ORDER BY priority DESC, created_at ASC LIMIT 1")
+        columns = [col[0] for col in cursor.description]
+        task = cursor.fetchone()
+        conn.close()
+        return dict(zip(columns, task)) if task else None
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Datenbankfehler: {e}")
+
+@app.put("/tasks/{task_id}", response_model=Task)
+def update_task(task_id: str, task_update: TaskUpdate):
+    try:
+        conn = sqlite3.connect(TASKS_DB)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+        current_task = cursor.fetchone()
+        if not current_task:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Task not found")
+        columns = [col[0] for col in cursor.description]
+        current_task_dict = dict(zip(columns, current_task))
+        updated_task = {**current_task_dict, **task_update.dict(exclude_unset=True)}
+        updated_task["updated_at"] = datetime.utcnow().isoformat()
+        cursor.execute("""
+            UPDATE tasks
+            SET title = ?, description = ?, priority = ?, status = ?, assignee = ?, acceptance_criteria = ?, dependencies = ?, updated_at = ?
+            WHERE id = ?
+        """, (
+            updated_task["title"], updated_task["description"], updated_task["priority"],
+            updated_task["status"], updated_task["assignee"], str(updated_task["acceptance_criteria"]),
+            str(updated_task["dependencies"]), updated_task["updated_at"], task_id
+        ))
+        conn.commit()
+        cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+        updated_task = dict(zip(columns, cursor.fetchone()))
+        conn.close()
+        return updated_task
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Task konnte nicht aktualisiert werden: {e}")
+
+# --- Memory-Endpunkte ---
+@app.get("/memory", response_model=List[MemoryEntry])
+def get_memory():
+    try:
+        conn = sqlite3.connect(MEMORY_DB)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM memory")
+        columns = [col[0] for col in cursor.description]
+        entries = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        conn.close()
+        return entries
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Datenbankfehler: {e}")
+
+@app.post("/memory", response_model=MemoryEntry, status_code=status.HTTP_201_CREATED)
+def add_memory(entry: MemoryEntry):
+    try:
+        conn = sqlite3.connect(MEMORY_DB)
+        cursor = conn.cursor()
+        now = datetime.utcnow().isoformat()
+        cursor.execute("""
+            INSERT INTO memory (id, content, type, timestamp, metadata)
+            VALUES (?, ?, ?, ?, ?)
+        """, (entry.id, entry.content, entry.type, now, str(entry.metadata)))
+        conn.commit()
+        conn.close()
+        return entry
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Memory-Eintrag konnte nicht gespeichert werden: {e}")
+
+# --- Module- und Agenten-Endpunkte ---
+@app.get("/modules", response_model=List[Dict])
+def get_modules():
+    try:
+        conn = sqlite3.connect(MODULES_DB)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM modules")
+        columns = [col[0] for col in cursor.description]
+        modules = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        conn.close()
+        return modules
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Datenbankfehler: {e}")
+
+@app.post("/modules/register", response_model=Dict, status_code=status.HTTP_201_CREATED)
+def register_module(module: Dict):
+    try:
+        conn = sqlite3.connect(MODULES_DB)
+        cursor = conn.cursor()
+        now = datetime.utcnow().isoformat()
+        module_id = str(uuid.uuid4())
+        cursor.execute("""
+            INSERT INTO modules (id, name, version, description, capabilities, api_endpoint, is_active, registered_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            module_id, module["name"], module["version"], module.get("description", ""),
+            str(module.get("capabilities", [])), module["api_endpoint"], module.get("is_active", True), now
+        ))
+        conn.commit()
+        conn.close()
+        return {"status": "registered", "module_id": module_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Modul konnte nicht registriert werden: {e}")
+
+@app.get("/agents")
+def get_agents():
+    return DEFAULT_AGENTS
+
+@app.post("/agents/register")
+def register_agent(agent: Dict):
+    DEFAULT_AGENTS.append(agent)
+    return {"status": "registered", "agent": agent}
+
+@app.get("/health")
+def health_check():
+    return {"status": "healthy", "version": "0.1.0", "workers": 1}
+
+---
+---
+#### 4. core/task_manager.py
+---
+import sqlite3
+import uuid
+from datetime import datetime
+from .config import TASKS_DB
+
+def save_task(task: dict):
+    """Speichert einen Task in der Datenbank."""
+    conn = sqlite3.connect(TASKS_DB)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO tasks (id, title, description, priority, status, assignee, acceptance_criteria, dependencies, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        task.get("id", str(uuid.uuid4())),
+        task["title"], task["description"], task.get("priority", "medium"),
+        task.get("status", "open"), task.get("assignee"),
+        str(task.get("acceptance_criteria", [])), str(task.get("dependencies", [])),
+        task.get("created_at", datetime.utcnow().isoformat()),
+        task.get("updated_at", datetime.utcnow().isoformat())
+    ))
+    conn.commit()
+    conn.close()
+
+def get_task(task_id: str) -> dict:
+    """Lädt einen Task aus der Datenbank."""
+    conn = sqlite3.connect(TASKS_DB)
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+    task = cursor.fetchone()
+    conn.close()
+    if not task:
+        return None
+    columns = [col[0] for col in cursor.description]
+    return dict(zip(columns, task))
+
+---
+---
+#### 5. core/memory_manager.py
+---
+import sqlite3
+from .config import MEMORY_DB
+
+def init_db():
+    """Initialisiert die Memory-Datenbank."""
+    conn = sqlite3.connect(MEMORY_DB)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS memory (
+            id TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            type TEXT CHECK(type IN ('short_term', 'long_term', 'system')),
+            timestamp TIMESTAMP,
+            metadata TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+---
+---
+#### 6. docker-compose.yml
+---
+version: '3.8'
+
+services:
+  pigenus-core:
+    image: arm64v8/python:3.11-slim
+    container_name: ur-pigenus-core
+    volumes:
+      - ./core:/app/core
+      - ./requirements.txt:/app/requirements.txt
+      - ./data:/data
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONPATH=/app
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    command: >
+      sh -c "pip install -r /app/requirements.txt &&
+             uvicorn core.agent_api:app --host 0.0.0.0 --port 8000 --workers 1"
+    restart: unless-stopped
+    networks:
+      - genus-net
+
+  echo-module:
+    build:
+      context: .
+      dockerfile: modules/echo/Dockerfile
+    container_name: ur-pigenus-echo
+    ports:
+      - "8001:8001"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    restart: unless-stopped
+    networks:
+      - genus-net
+
+  redis:
+    image: arm64v8/redis:latest
+    container_name: ur-pigenus-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    restart: unless-stopped
+    networks:
+      - genus-net
+    profiles: ["redis"]
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: ur-pigenus-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    restart: unless-stopped
+    networks:
+      - genus-net
+    profiles: ["qdrant"]
+
+networks:
+  genus-net:
+    driver: bridge
+
+---
+---
+#### 7. modules/echo/module.yaml
+---
+name: "echo"
+version: "0.1.0"
+description: "Gibt Input-Text zurück (Testzwecke)."
+capabilities: ["text_echo"]
+api_endpoint: "/echo"
+dependencies: ["fastapi>=0.100.0", "uvicorn>=0.20.0"]
+
+---
+---
+#### 8. modules/echo/main.py
+---
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI(title="Echo-Modul")
+
+class EchoInput(BaseModel):
+    input: str
+
+@app.post("/echo")
+def echo(input: EchoInput):
+    return {"output": input.input}
+
+---
+---
+#### 9. modules/echo/Dockerfile
+---
+FROM arm64v8/python:3.11-slim
+WORKDIR /app
+COPY modules/echo/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY modules/echo/main.py .
+COPY modules/echo/module.yaml .
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]
+
+---
+---
+#### 10. modules/echo/requirements.txt
+---
+fastapi>=0.100.0,<0.101.0
+uvicorn>=0.20.0,<0.21.0
+
+---
+---
+#### 11. modules/echo/tests/test_echo.py
+---
+from fastapi.testclient import TestClient
+from ..main import app
+
+client = TestClient(app)
+
+def test_echo():
+    response = client.post("/echo", json={"input": "Test"})
+    assert response.status_code == 200
+    assert response.json() == {"output": "Test"}
+
+---
+---
+#### 12. tests/test_core.py
+---
+import pytest
+from fastapi.testclient import TestClient
+from core.agent_api import app
+import sqlite3
+import os
+
+client = TestClient(app)
+
+TEST_TASKS_DB = "test_tasks.db"
+TEST_MEMORY_DB = "test_memory.db"
+TEST_MODULES_DB = "test_modules.db"
+
+@pytest.fixture(scope="module")
+def setup_test_db():
+    for db_path in [TEST_TASKS_DB, TEST_MEMORY_DB, TEST_MODULES_DB]:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        if "tasks" in db_path:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT,
+                    priority TEXT CHECK(priority IN ('high', 'medium', 'low')),
+                    status TEXT CHECK(status IN ('open', 'in_progress', 'done', 'failed')),
+                    assignee TEXT, acceptance_criteria TEXT, dependencies TEXT,
+                    created_at TIMESTAMP, updated_at TIMESTAMP
+                )
+            """)
+        elif "memory" in db_path:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS memory (
+                    id TEXT PRIMARY KEY, content TEXT NOT NULL,
+                    type TEXT CHECK(type IN ('short_term', 'long_term', 'system')),
+                    timestamp TIMESTAMP, metadata TEXT
+                )
+            """)
+        elif "modules" in db_path:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS modules (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, version TEXT NOT NULL,
+                    description TEXT, capabilities TEXT, api_endpoint TEXT NOT NULL,
+                    is_active BOOLEAN DEFAULT 1, registered_at TIMESTAMP
+                )
+            """)
+        conn.commit()
+        conn.close()
+    yield
+    for db in [TEST_TASKS_DB, TEST_MEMORY_DB, TEST_MODULES_DB]:
+        if os.path.exists(db):
+            os.remove(db)
+
+def test_health_check():
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "healthy"
+    assert response.json()["workers"] == 1
+
+def test_create_task():
+    task_data = {"title": "Test Task", "description": "Ein Test-Task.", "priority": "high"}
+    response = client.post("/tasks", json=task_data)
+    assert response.status_code == 201
+    task = response.json()
+    assert "id" in task
+    assert task["title"] == task_data["title"]
+    assert task["status"] == "open"
+
+def test_get_tasks():
+    task_data = {"title": "Test Task 2", "description": "Ein weiterer Test-Task.", "priority": "medium"}
+    client.post("/tasks", json=task_data)
+    response = client.get("/tasks")
+    assert response.status_code == 200
+    tasks = response.json()
+    assert isinstance(tasks, list)
+    assert len(tasks) >= 1
+
+def test_update_task():
+    task_data = {"title": "Task zum Aktualisieren", "description": "Wird gleich aktualisiert.", "priority": "low"}
+    create_response = client.post("/tasks", json=task_data)
+    task_id = create_response.json()["id"]
+    update_data = {"status": "in_progress", "priority": "high"}
+    response = client.put(f"/tasks/{task_id}", json=update_data)
+    assert response.status_code == 200
+    updated_task = response.json()
+    assert updated_task["status"] == "in_progress"
+    assert updated_task["priority"] == "high"
+
+def test_get_next_task():
+    task_data = {"title": "Nächster Task", "description": "Sollte als nächstes zurückgegeben werden.", "priority": "high", "status": "open"}
+    client.post("/tasks", json=task_data)
+    response = client.get("/tasks/next")
+    assert response.status_code == 200
+    task = response.json()
+    assert task is not None
+    assert task["title"] == task_data["title"]
+
+def test_error_handling():
+    response = client.put("/tasks/non-existent-id", json={"status": "done"})
+    assert response.status_code == 404
+    assert "Task not found" in response.json()["detail"]
+
+---
+---
+#### 13. scripts/setup.sh
+---
+#!/bin/bash
+set -e
+
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+echo -e "${GREEN}=== Ur-PiGenus v0.1 Setup für Raspberry Pi 5 ===${NC}"
+
+echo -e "${YELLOW}1. Prüfe Systemvoraussetzungen...${NC}"
+if ! command -v docker &> /dev/null; then
+    echo -e "${RED}❌ Docker ist nicht installiert. Installiere Docker zuerst!${NC}"
+    exit 1
+fi
+if ! command -v python3 &> /dev/null; then
+    echo -e "${RED}❌ Python 3 ist nicht installiert. Installiere Python 3 zuerst!${NC}"
+    exit 1
+fi
+ARCH=$(uname -m)
+if [ "$ARCH" != "aarch64" ] && [ "$ARCH" != "arm64" ]; then
+    echo -e "${RED}❌ System ist kein ARM64 (aarch64/arm64). Ur-PiGenus benötigt ARM64!${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✅ Systemvoraussetzungen erfüllt.${NC}"
+
+echo -e "${YELLOW}2. Installiere System-Abhängigkeiten...${NC}"
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y docker.io git python3-pip python3-venv
+
+if ! command -v docker-compose &> /dev/null; then
+    echo -e "${YELLOW}   Installiere docker-compose...${NC}"
+    sudo apt install -y docker-compose-plugin
+fi
+
+sudo systemctl enable docker
+
+echo -e "${YELLOW}3. Installiere Python-Abhängigkeiten...${NC}"
+pip install -r requirements.txt
+
+mkdir -p data/redis data/qdrant
+
+echo -e "${YELLOW}4. Starte Docker-Container (Core + Echo-Modul)...${NC}"
+if command -v docker-compose &> /dev/null; then
+    docker-compose up -d
+else
+    docker compose up -d
+fi
+
+echo -e "${YELLOW}5. Initialisiere Datenbanken...${NC}"
+if ! python3 -c "from core.memory_manager import init_db; init_db()"; then
+    echo -e "${RED}❌ Datenbank-Initialisierung fehlgeschlagen!${NC}"
+    exit 1
+fi
+
+echo -e "${YELLOW}6. Erstelle Test-Task...${NC}"
+if ! python3 -c "
+from core.task_manager import save_task
+task = {
+    'title': 'Echo-Modul testen',
+    'description': 'Teste das Echo-Modul mit: curl -X POST http://localhost:8001/echo -H \"Content-Type: application/json\" -d \"{\\\"input\\\": \\\"Test\\\"}\"',
+    'priority': 'high',
+    'status': 'open',
+    'acceptance_criteria': ['Echo-Modul antwortet mit {\"output\": \"Test\"}'],
+    'dependencies': []
+}
+save_task(task)
+"; then
+    echo -e "${RED}❌ Test-Task konnte nicht erstellt werden!${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✅ Setup erfolgreich abgeschlossen!${NC}"
+echo -e "Ur-PiGenus läuft unter: ${YELLOW}http://$(hostname -I | awk '{print $1}'):8000${NC}"
+echo -e "Echo-Modul läuft unter: ${YELLOW}http://$(hostname -I | awk '{print $1}'):8001/echo${NC}"
+echo -e "Docker-Container anzeigen:"
+if command -v docker-compose &> /dev/null; then
+    echo -e "  ${YELLOW}docker-compose ps${NC}"
+else
+    echo -e "  ${YELLOW}docker compose ps${NC}"
+fi
+echo -e "${GREEN}Hinweis: Redis/Qdrant können mit:${NC}"
+echo -e "  ${YELLOW}docker-compose --profile redis --profile qdrant up -d${NC}"
+echo -e "  ${YELLOW}oder${NC}"
+echo -e "  ${YELLOW}docker compose --profile redis --profile qdrant up -d${NC}"
+echo -e "${GREEN}gestartet werden.${NC}"
+
+---
+---
+#### 14. scripts/validate_module.py
+---
+import yaml
+import sys
+
+MODULE_CONTRACT = {
+    "required_fields": ["name", "version", "description", "capabilities", "api_endpoint"],
+    "optional_fields": ["dependencies", "is_active"]
+}
+
+def validate_module(module_yaml_path: str) -> bool:
+    try:
+        with open(module_yaml_path, "r") as f:
+            module = yaml.safe_load(f)
+        for field in MODULE_CONTRACT["required_fields"]:
+            if field not in module:
+                print(f"❌ Fehlendes Feld: {field}")
+                return False
+        print(f"✅ Modul {module['name']} ist gültig.")
+        return True
+    except Exception as e:
+        print(f"❌ Fehler beim Validieren: {e}")
+        return False
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Verwendung: python validate_module.py <pfad/zur/module.yaml>")
+        sys.exit(1)
+    validate_module(sys.argv[1])
+
+---
+---
+#### 15. scripts/governance_bot.py
+---
+import requests
+from typing import Dict
+
+class GovernanceBot:
+    def __init__(self, core_url: str = "http://localhost:8000"):
+        self.core_url = core_url
+
+    def get_next_task(self) -> Dict:
+        response = requests.get(f"{self.core_url}/tasks/next")
+        if response.status_code == 200:
+            return response.json()
+        return None
+
+    def assign_task(self, task_id: str, agent: str) -> bool:
+        response = requests.put(
+            f"{self.core_url}/tasks/{task_id}",
+            json={"assignee": agent, "status": "in_progress"}
+        )
+        return response.status_code == 200
+
+if __name__ == "__main__":
+    bot = GovernanceBot()
+    next_task = bot.get_next_task()
+    if next_task:
+        print(f"Nächster Task: {next_task['title']} (ID: {next_task['id']})")
+    else:
+        print("Keine offenen Tasks.")
+
+---
+---
+#### 16. requirements.txt
+---
+fastapi>=0.100.0,<0.101.0
+uvicorn>=0.20.0,<0.21.0
+pydantic>=2.0.0,<2.1.0
+python-dotenv>=1.0.0
+pytest>=7.0.0,<7.1.0
+pyyaml>=6.0.0,<6.1.0
+redis>=4.5.0,<4.6.0
+qdrant-client>=1.7.0,<1.8.0
+requests>=2.31.0
+
+---
+---
+#### 17. .gitignore
+---
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Docker
+data/
+*.log
+docker-compose.override.yml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+---
+---
+#### 18. README.md
+---
+# Ur-PiGenus v0.1 – Stabilitätsoptimiert für Raspberry Pi 5
+
+## 🎯 Zweck
+Ur-PiGenus ist der **embryonale Kern von GENUS**, der:
+- **Aufgaben verwaltet** (Tasks für Agenten).
+- **Gedächtnis speichert** (SQLite).
+- **Module koordiniert** (Docker-Container).
+- **Agenten steuert** (Mistral Vibe, Devstral 2).
+
+**Design-Prinzipien:**
+> *"Wenn Annahmen unklar sind, entscheide **immer** zugunsten von **Stabilität, Wartbarkeit und Raspberry-Pi-Kompatibilität**."*
+
+---
+
+## 🚀 Schnellstart (Raspberry Pi 5)
+
+### 1. Systemvoraussetzungen
+- **Betriebssystem:** Raspberry Pi OS (64-bit) oder Ubuntu Server 22.04 (ARM64).
+- **Hardware:** Raspberry Pi 5 (4 GB RAM empfohlen).
+- **Abhängigkeiten:** Docker, Docker Compose, Python 3.11+.
+
+### 2. Repository klonen
+```bash
+git clone https://github.com/WoltLab51/UrPi.git
+cd UrPi
+```
+
+### 3. Setup-Skript ausführen
+```bash
+chmod +x scripts/setup.sh
+./scripts/setup.sh
+```
+→ Startet nur die aktiven Komponenten (FastAPI, Echo-Modul, SQLite).
+Redis/Qdrant müssen explizit mit `--profile` gestartet werden.
+
+### 4. API testen
+```bash
+# Core-Health-Check
+curl http://localhost:8000/health
+# → {"status": "healthy", "version": "0.1.0", "workers": 1}
+
+# Task erstellen (ID wird automatisch generiert!)
+curl -X POST http://localhost:8000/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Echo-Modul testen", "description": "Teste das Echo-Modul.", "priority": "high"}'
+
+# Echo-Modul testen
+curl -X POST http://localhost:8001/echo \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Hallo Ur-PiGenus!"}'
+# → {"output": "Hallo Ur-PiGenus!"}
+```
+
+### 5. Redis/Qdrant starten (optional)
+```bash
+docker compose --profile redis --profile qdrant up -d
+```
+
+---
+## ⚠️ Bekannte Einschränkungen & Stabilitätshinweise
+| Problem | Lösung | Status |
+|---------|--------|--------|
+| SQLite + Workers > 1 | `--workers 1` in docker-compose.yml | ✅ Behoben |
+| Task-IDs manuell | Auto-ID-Generierung in agent_api.py | ✅ Behoben |
+| Redis nicht genutzt | SQLite als primäre Queue | ✅ Dokumentiert |
+| Qdrant nicht genutzt | SQLite als primärer Speicher | ✅ Dokumentiert |
+
+---
+## 📜 Dokumentation
+- [GENUS_MANIFEST.md](docs/GENUS_MANIFEST.md)
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- [MODULE_CONTRACT.md](docs/MODULE_CONTRACT.md)
+- [ROADMAP.md](docs/ROADMAP.md)
+
+---
+## 🔌 Endpunkte
+| Endpunkt | Methode | Beschreibung | Status-Code |
+|----------|---------|--------------|-------------|
+| `/tasks` | GET | Liste aller Tasks | 200 |
+| `/tasks` | POST | Task erstellen | 201 |
+| `/tasks/{id}` | PUT | Task aktualisieren | 200/404 |
+| `/tasks/next` | GET | Nächster offener Task | 200/404 |
+| `/memory` | GET/POST | Gedächtnis | 200/201 |
+| `/modules` | GET | Liste aller Module | 200 |
+| `/health` | GET | Health-Check | 200 |
+
+---
+## 🧪 Tests
+```bash
+pytest
+pytest tests/test_core.py -v
+```
+
+---
+## 📦 Docker-Befehle
+```bash
+docker compose up -d
+docker compose --profile redis --profile qdrant up -d
+docker compose down
+```
+
+---
+## 📞 Support
+- **Issues:** [GitHub Issues](https://github.com/WoltLab51/UrPi/issues)
+- **Kontakt:** Ronny Wolter
+
+---
+---
+#### 19. docs/GENUS_MANIFEST.md
+---
+# GENUS Manifest
+
+## 🌍 Vision
+GENUS ist ein **hybrides, selbstoptimierendes KI-Ökosystem**, das:
+- **Dezentrale Intelligenz** mit zentraler Koordination verbindet.
+- **Modulare KI-Komponenten** (Plug-and-Play) ermöglicht.
+- **Datenschutz und Sicherheit** durch lokale Verarbeitung garantiert.
+- **Skalierbar** von 1 bis 10.000+ Knoten ist.
+
+## 🎯 Kernprinzipien
+1. **Stabilität vor Features**
+2. **Lokal vor Cloud**
+3. **Einfachheit vor Eleganz**
+4. **Raspberry-Pi-Kompatibilität**
+
+## 🏗️ Architektur
+- **PiGenus**: Zentraler Orchestrator (Raspberry Pi 5).
+- **Worker**: Schwere KI-Aufgaben (LLMs, Training).
+- **Endgeräte**: UI und leichte lokale KI.
+
+## 🚀 Roadmap
+| Phase | Ziel | Zeitrahmen |
+|-------|------|------------|
+| MVP | Kernfunktionalität | 6 Monate |
+| Beta | Erweitert (Federated Learning) | 12 Monate |
+| Skalierung | 10.000+ Knoten | 24 Monate |
+
+---
+---
+#### 20. docs/ARCHITECTURE.md
+---
+# GENUS Architektur
+
+## 🏗️ Übersicht
+```
++-------------------+       +-------------------+       +-------------------+
+|     Endgeräte     |<----->|      Worker       |<----->|     PiGenus        |
+| (UI, TinyML)      |       | (LLMs, Training)  |       | (Orchestrierung)  |
++-------------------+       +-------------------+       +-------------------+
+```
+
+## 🔧 Komponenten
+### 1. PiGenus (Raspberry Pi 5)
+- **Rolle**: Zentraler Orchestrator.
+- **Funktionen**: Aufgabenverteilung, Gedächtnisverwaltung, Modul-Registry.
+- **Technologien**: FastAPI, SQLite, Docker.
+
+### 2. Worker
+- **Rolle**: Schwere KI-Aufgaben.
+- **Funktionen**: LLM-Inferenz, Training, Caching.
+- **Technologien**: Docker-Container.
+
+### 3. Endgeräte
+- **Rolle**: Benutzerinteraktion.
+- **Funktionen**: UI, leichte KI, Offline-Speicher.
+- **Technologien**: React, Python.
+
+## 🔄 Kommunikation
+- **Protokolle**: gRPC/QUIC, Libp2p.
+- **Datenformat**: JSON/Protobuf.
+
+---
+---
+#### 21. docs/MODULE_CONTRACT.md
+---
+# Modul-Vertrag
+
+## 📜 Allgemeine Regeln
+- Jedes Modul muss eine `module.yaml` enthalten.
+- Jedes Modul muss als Docker-Container lauffähig sein.
+
+## 📁 Struktur
+```
+modules/<modulname>/
+├── module.yaml
+├── main.py
+├── Dockerfile
+├── requirements.txt
+└── tests/
+    └── test_<modulname>.py
+```
+
+## 📝 `module.yaml` (Pflichtfelder)
+```yaml
+name: "modulname"
+version: "0.1.0"
+description: "Beschreibung"
+capabilities: ["fähigkeit1"]
+api_endpoint: "/endpoint"
+```
+
+## 🧪 Tests
+- Jedes Modul muss Tests in `tests/test_<modulname>.py` enthalten.
+
+---
+---
+#### 22. docs/ROADMAP.md
+---
+# GENUS Roadmap
+
+## 🗺️ Phasen
+### Phase 1: MVP (0–6 Monate)
+- Ur-PiGenus v0.1 (Tasks, Memory, Module).
+- Docker-Integration.
+
+### Phase 2: Beta (6–12 Monate)
+- Federated Learning (Pilot).
+- Monitoring & Logging.
+
+### Phase 3: Skalierung (12–24 Monate)
+- Sharding für SQLite.
+- Load Balancing für PiGenus.
+
+### Phase 4: Expansion (24–36 Monate)
+- Multi-Tenancy.
+- Enterprise-Features.
+
+---
+=== END UR-PIGENUS V0.1 FINAL ===
+```
