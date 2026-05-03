@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  pigenus-core:
+    image: arm64v8/python:3.11-slim
+    container_name: ur-pigenus-core
+    volumes:
+      - ./core:/app/core
+      - ./requirements.txt:/app/requirements.txt
+      - ./data:/data
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONPATH=/app
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    command: >
+      sh -c "pip install -r /app/requirements.txt &&
+             uvicorn core.agent_api:app --host 0.0.0.0 --port 8000 --workers 1"
+    restart: unless-stopped
+    networks:
+      - genus-net
+
+  echo-module:
+    build:
+      context: .
+      dockerfile: modules/echo/Dockerfile
+    container_name: ur-pigenus-echo
+    ports:
+      - "8001:8001"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    restart: unless-stopped
+    networks:
+      - genus-net
+
+  redis:
+    image: arm64v8/redis:latest
+    container_name: ur-pigenus-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    restart: unless-stopped
+    networks:
+      - genus-net
+    profiles: ["redis"]
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: ur-pigenus-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    restart: unless-stopped
+    networks:
+      - genus-net
+    profiles: ["qdrant"]
+
+networks:
+  genus-net:
+    driver: bridge

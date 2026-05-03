@@ -1,0 +1,6 @@
+name: "echo"
+version: "0.1.0"
+description: "Gibt Input-Text zurück (Testzwecke)."
+capabilities: ["text_echo"]
+api_endpoint: "/echo"
+dependencies: ["fastapi>=0.100.0", "uvicorn>=0.20.0"]
