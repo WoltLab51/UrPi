@@ -7,13 +7,13 @@ import sqlite3
 import os
 import uuid
 from datetime import datetime, timezone
-from .config import TASKS_DB, MEMORY_DB, MODULES_DB, DEFAULT_AGENTS
+from .config import TASKS_DB, MEMORY_DB, MODULES_DB, CHAT_DB, DEFAULT_AGENTS
 
 # --- Datenbank-Initialisierung ---
 def init_db():
     try:
         os.makedirs(os.path.dirname(TASKS_DB), exist_ok=True)
-        for db_path in [TASKS_DB, MEMORY_DB, MODULES_DB]:
+        for db_path in [TASKS_DB, MEMORY_DB, MODULES_DB, CHAT_DB]:
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
             if "tasks" in str(db_path):
@@ -54,6 +54,27 @@ def init_db():
                         registered_at TIMESTAMP
                     )
                 """)
+            elif "chat" in str(db_path):
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS conversations (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        title TEXT,
+                        created_at TIMESTAMP,
+                        updated_at TIMESTAMP
+                    )
+                """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS messages (
+                        id TEXT PRIMARY KEY,
+                        conversation_id TEXT NOT NULL,
+                        role TEXT CHECK(role IN ('user', 'assistant', 'system')),
+                        content TEXT NOT NULL,
+                        created_at TIMESTAMP,
+                        metadata TEXT,
+                        FOREIGN KEY (conversation_id) REFERENCES conversations (id)
+                    )
+                """)
             conn.commit()
             conn.close()
     except Exception as e:
@@ -90,6 +111,101 @@ def _parse_memory_entry(row: dict) -> dict:
         except (json.JSONDecodeError, TypeError):
             row["metadata"] = {}
     return row
+
+def _parse_message(row: dict) -> dict:
+    """Parse JSON fields from a message row."""
+    if isinstance(row.get("metadata"), str):
+        try:
+            row["metadata"] = json.loads(row["metadata"])
+        except (json.JSONDecodeError, TypeError):
+            row["metadata"] = {}
+    return row
+
+def _generate_reply(message: str, user_id: str) -> tuple[str, List[str], List[str]]:
+    """
+    Generate a rule-based reply based on the message content.
+    Returns: (reply, suggested_actions, used_context)
+    """
+    message_lower = message.lower()
+    reply = ""
+    suggested_actions = []
+    used_context = []
+
+    # Check for next task query
+    if any(keyword in message_lower for keyword in ["nächster schritt", "nächste", "next step", "next task", "was soll ich"]):
+        try:
+            conn = sqlite3.connect(TASKS_DB)
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM tasks WHERE status = 'open'
+                ORDER BY CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
+                         created_at ASC
+                LIMIT 1
+            """)
+            columns = [col[0] for col in cursor.description]
+            task = cursor.fetchone()
+            conn.close()
+
+            if task:
+                task_dict = _parse_task(dict(zip(columns, task)))
+                reply = f"Der nächste offene Task ist: '{task_dict['title']}' (Priorität: {task_dict['priority']}). {task_dict['description']}"
+                suggested_actions = ["View all tasks", "Update task status", "Check memory"]
+                used_context = ["tasks"]
+            else:
+                reply = "Es gibt aktuell keine offenen Tasks. Du könntest die Roadmap oder offene GitHub Issues prüfen."
+                suggested_actions = ["Review current tasks", "Check GitHub issues", "Add new task"]
+                used_context = ["tasks"]
+        except Exception as e:
+            reply = f"Fehler beim Abrufen der Tasks: {e}"
+            suggested_actions = ["Check system health"]
+            used_context = []
+
+    # Check for status query
+    elif any(keyword in message_lower for keyword in ["status", "zustand", "übersicht", "overview"]):
+        try:
+            # Get task statistics
+            conn_tasks = sqlite3.connect(TASKS_DB)
+            cursor_tasks = conn_tasks.cursor()
+            cursor_tasks.execute("SELECT COUNT(*) FROM tasks")
+            total_tasks = cursor_tasks.fetchone()[0]
+            cursor_tasks.execute("SELECT COUNT(*) FROM tasks WHERE status = 'open'")
+            open_tasks = cursor_tasks.fetchone()[0]
+            conn_tasks.close()
+
+            # Get memory count
+            conn_memory = sqlite3.connect(MEMORY_DB)
+            cursor_memory = conn_memory.cursor()
+            cursor_memory.execute("SELECT COUNT(*) FROM memory")
+            memory_count = cursor_memory.fetchone()[0]
+            conn_memory.close()
+
+            reply = f"Aktueller Status: {total_tasks} Tasks gesamt, davon {open_tasks} offen. {memory_count} Memory-Einträge gespeichert."
+            suggested_actions = ["View next task", "View all tasks", "View memory"]
+            used_context = ["tasks", "memory"]
+        except Exception as e:
+            reply = f"Fehler beim Abrufen des Status: {e}"
+            suggested_actions = ["Check system health"]
+            used_context = []
+
+    # General greeting or unclear query
+    else:
+        try:
+            # Get basic stats
+            conn_tasks = sqlite3.connect(TASKS_DB)
+            cursor_tasks = conn_tasks.cursor()
+            cursor_tasks.execute("SELECT COUNT(*) FROM tasks WHERE status = 'open'")
+            open_tasks = cursor_tasks.fetchone()[0]
+            conn_tasks.close()
+
+            reply = f"Hallo! Ich bin Ur-PiGenus. Es gibt {open_tasks} offene Tasks. Wie kann ich dir helfen?"
+            suggested_actions = ["What's the next step?", "Show status", "View all tasks"]
+            used_context = ["tasks"]
+        except Exception:
+            reply = "Hallo! Ich bin Ur-PiGenus. Wie kann ich dir helfen?"
+            suggested_actions = ["What's the next step?", "Show status", "View all tasks"]
+            used_context = []
+
+    return reply, suggested_actions, used_context
 
 
 class TaskCreate(BaseModel):
@@ -140,6 +256,32 @@ class RootResponse(BaseModel):
     version: str
     docs: str
     health: str
+
+class ChatMessage(BaseModel):
+    id: str
+    conversation_id: str
+    role: Literal["user", "assistant", "system"]
+    content: str
+    created_at: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class Conversation(BaseModel):
+    id: str
+    user_id: str
+    title: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+class ChatRequest(BaseModel):
+    user_id: str
+    message: str
+    conversation_id: Optional[str] = None
+
+class ChatResponse(BaseModel):
+    conversation_id: str
+    reply: str
+    suggested_actions: List[str] = Field(default_factory=list)
+    used_context: List[str] = Field(default_factory=list)
 
 # --- Task-Endpunkte ---
 @app.get("/tasks", response_model=List[Task])
@@ -308,6 +450,106 @@ def get_agents():
 def register_agent(agent: Agent):
     _registered_agents.append(agent.model_dump())
     return AgentRegisterResponse(status="registered", agent=agent)
+
+# --- Chat-Endpunkte ---
+@app.post("/chat", response_model=ChatResponse, status_code=status.HTTP_201_CREATED)
+def chat(request: ChatRequest):
+    """
+    Process a user message and generate a response.
+    Creates or updates a conversation and stores messages.
+    """
+    try:
+        conn = sqlite3.connect(CHAT_DB)
+        cursor = conn.cursor()
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Create or use existing conversation
+        if request.conversation_id:
+            conversation_id = request.conversation_id
+            # Update conversation timestamp
+            cursor.execute("""
+                UPDATE conversations SET updated_at = ? WHERE id = ?
+            """, (now, conversation_id))
+        else:
+            conversation_id = str(uuid.uuid4())
+            # Generate title from first message (first 50 chars)
+            title = request.message[:50] + "..." if len(request.message) > 50 else request.message
+            cursor.execute("""
+                INSERT INTO conversations (id, user_id, title, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (conversation_id, request.user_id, title, now, now))
+
+        # Store user message
+        user_message_id = str(uuid.uuid4())
+        cursor.execute("""
+            INSERT INTO messages (id, conversation_id, role, content, created_at, metadata)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (user_message_id, conversation_id, "user", request.message, now, json.dumps({})))
+
+        # Generate reply
+        reply, suggested_actions, used_context = _generate_reply(request.message, request.user_id)
+
+        # Store assistant message
+        assistant_message_id = str(uuid.uuid4())
+        cursor.execute("""
+            INSERT INTO messages (id, conversation_id, role, content, created_at, metadata)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (assistant_message_id, conversation_id, "assistant", reply, now, json.dumps({
+            "suggested_actions": suggested_actions,
+            "used_context": used_context
+        })))
+
+        conn.commit()
+        conn.close()
+
+        return ChatResponse(
+            conversation_id=conversation_id,
+            reply=reply,
+            suggested_actions=suggested_actions,
+            used_context=used_context
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chat-Anfrage fehlgeschlagen: {e}")
+
+@app.get("/chat/history", response_model=List[ChatMessage])
+def get_chat_history(conversation_id: str):
+    """
+    Get all messages from a specific conversation.
+    """
+    try:
+        conn = sqlite3.connect(CHAT_DB)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM messages
+            WHERE conversation_id = ?
+            ORDER BY created_at ASC
+        """, (conversation_id,))
+        columns = [col[0] for col in cursor.description]
+        messages = [_parse_message(dict(zip(columns, row))) for row in cursor.fetchall()]
+        conn.close()
+        return messages
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Fehler beim Abrufen der Chat-Historie: {e}")
+
+@app.get("/chat/sessions", response_model=List[Conversation])
+def get_chat_sessions(user_id: str):
+    """
+    Get all conversations for a specific user.
+    """
+    try:
+        conn = sqlite3.connect(CHAT_DB)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM conversations
+            WHERE user_id = ?
+            ORDER BY updated_at DESC
+        """, (user_id,))
+        columns = [col[0] for col in cursor.description]
+        conversations = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        conn.close()
+        return conversations
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Fehler beim Abrufen der Chat-Sessions: {e}")
 
 @app.get("/health", response_model=HealthResponse)
 def health_check():
