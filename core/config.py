@@ -8,6 +8,7 @@ BASE_DIR = Path(__file__).parent.parent
 TASKS_DB = os.path.join(BASE_DIR, "data", "tasks.db")
 MEMORY_DB = os.path.join(BASE_DIR, "data", "memory.db")
 MODULES_DB = os.path.join(BASE_DIR, "data", "modules.db")
+CHAT_DB = os.path.join(BASE_DIR, "data", "chat.db")
 
 # Standard-Agenten
 DEFAULT_AGENTS = [

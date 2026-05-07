@@ -1,22 +1,32 @@
 import pytest
 import os
+import sqlite3
 from fastapi.testclient import TestClient
 import core.agent_api as api_module
 from core.agent_api import app, init_db
 
 client = TestClient(app)
 
+def _fetch_chat_rows(query, params=()):
+    conn = api_module._connect_chat_db()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute(query, params).fetchall()
+    finally:
+        conn.close()
+
 @pytest.fixture(scope="module", autouse=True)
 def setup_test_db(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("testdata")
-    original = (api_module.TASKS_DB, api_module.MEMORY_DB, api_module.MODULES_DB)
+    original = (api_module.TASKS_DB, api_module.MEMORY_DB, api_module.MODULES_DB, api_module.CHAT_DB)
     original_registered = list(api_module._registered_agents)
     api_module.TASKS_DB = str(tmp / "tasks.db")
     api_module.MEMORY_DB = str(tmp / "memory.db")
     api_module.MODULES_DB = str(tmp / "modules.db")
+    api_module.CHAT_DB = str(tmp / "chat.db")
     init_db()
     yield
-    api_module.TASKS_DB, api_module.MEMORY_DB, api_module.MODULES_DB = original
+    api_module.TASKS_DB, api_module.MEMORY_DB, api_module.MODULES_DB, api_module.CHAT_DB = original
     api_module._registered_agents.clear()
     api_module._registered_agents.extend(original_registered)
 
@@ -198,3 +208,221 @@ def test_task_status_validation_invalid():
     invalid_update = {"status": "invalid_status"}
     response = client.put(f"/tasks/{task_id}", json=invalid_update)
     assert response.status_code == 422  # Validation error
+
+# --- Chat Tests ---
+def test_chat_create_new_conversation():
+    """Test POST /chat creates a new conversation and stores messages."""
+    chat_request = {
+        "user_id": "ronny",
+        "message": "Was ist der nächste sinnvolle Schritt?"
+    }
+    response = client.post("/chat", json=chat_request)
+    assert response.status_code == 201
+    data = response.json()
+    assert "conversation_id" in data
+    assert "reply" in data
+    assert "suggested_actions" in data
+    assert "used_context" in data
+    assert len(data["conversation_id"]) > 0
+    assert len(data["reply"]) > 0
+    assert isinstance(data["suggested_actions"], list)
+    assert isinstance(data["used_context"], list)
+
+    conversation_rows = _fetch_chat_rows(
+        "SELECT * FROM conversations WHERE id = ?",
+        (data["conversation_id"],)
+    )
+    assert len(conversation_rows) == 1
+    assert conversation_rows[0]["user_id"] == chat_request["user_id"]
+
+    message_rows = _fetch_chat_rows(
+        """
+        SELECT role, content FROM messages
+        WHERE conversation_id = ?
+        ORDER BY created_at ASC
+        """,
+        (data["conversation_id"],)
+    )
+    assert len(message_rows) == 2
+    assert [row["role"] for row in message_rows] == ["user", "assistant"]
+    assert message_rows[0]["content"] == chat_request["message"]
+    assert message_rows[1]["content"] == data["reply"]
+
+def test_chat_continue_conversation():
+    """Test POST /chat with existing conversation_id appends messages."""
+    # Create first message
+    chat_request1 = {
+        "user_id": "ronny",
+        "message": "Hallo!"
+    }
+    response1 = client.post("/chat", json=chat_request1)
+    assert response1.status_code == 201
+    conversation_id = response1.json()["conversation_id"]
+
+    # Continue conversation
+    chat_request2 = {
+        "user_id": "ronny",
+        "message": "Was ist der Status?",
+        "conversation_id": conversation_id
+    }
+    response2 = client.post("/chat", json=chat_request2)
+    assert response2.status_code == 201
+    data = response2.json()
+    assert data["conversation_id"] == conversation_id
+
+    conversation_rows = _fetch_chat_rows(
+        "SELECT * FROM conversations WHERE id = ?",
+        (conversation_id,)
+    )
+    assert len(conversation_rows) == 1
+
+    message_rows = _fetch_chat_rows(
+        """
+        SELECT role, content FROM messages
+        WHERE conversation_id = ?
+        ORDER BY created_at ASC
+        """,
+        (conversation_id,)
+    )
+    assert len(message_rows) == 4
+    assert [(row["role"], row["content"]) for row in message_rows] == [
+        ("user", "Hallo!"),
+        ("assistant", response1.json()["reply"]),
+        ("user", "Was ist der Status?"),
+        ("assistant", data["reply"]),
+    ]
+
+def test_chat_continue_missing_conversation_returns_404():
+    """Test POST /chat rejects unknown conversation IDs."""
+    response = client.post("/chat", json={
+        "user_id": "ronny",
+        "message": "Weiter geht's",
+        "conversation_id": "does-not-exist"
+    })
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Conversation not found"
+
+def test_chat_continue_other_users_conversation_returns_404():
+    """Test POST /chat cannot append to another user's conversation."""
+    create_response = client.post("/chat", json={
+        "user_id": "owner",
+        "message": "Private conversation"
+    })
+    conversation_id = create_response.json()["conversation_id"]
+
+    response = client.post("/chat", json={
+        "user_id": "intruder",
+        "message": "Ich hänge mich an",
+        "conversation_id": conversation_id
+    })
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Conversation not found"
+
+    message_rows = _fetch_chat_rows(
+        """
+        SELECT role, content FROM messages
+        WHERE conversation_id = ?
+        ORDER BY created_at ASC
+        """,
+        (conversation_id,)
+    )
+    assert len(message_rows) == 2
+
+def test_chat_history():
+    """Test GET /chat/history returns messages in order."""
+    # Create a conversation with multiple messages
+    chat_request1 = {
+        "user_id": "testuser",
+        "message": "First message"
+    }
+    response1 = client.post("/chat", json=chat_request1)
+    conversation_id = response1.json()["conversation_id"]
+
+    chat_request2 = {
+        "user_id": "testuser",
+        "message": "Second message",
+        "conversation_id": conversation_id
+    }
+    client.post("/chat", json=chat_request2)
+
+    # Get history
+    response = client.get(f"/chat/history?conversation_id={conversation_id}")
+    assert response.status_code == 200
+    messages = response.json()
+    assert isinstance(messages, list)
+    assert len(messages) >= 4  # 2 user messages + 2 assistant messages
+    # Check messages are in order
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"] == "First message"
+    assert messages[1]["role"] == "assistant"
+
+def test_chat_sessions():
+    """Test GET /chat/sessions returns conversations for user."""
+    # Create conversations
+    user_id = "session_test_user"
+    chat_request1 = {
+        "user_id": user_id,
+        "message": "Conversation 1"
+    }
+    client.post("/chat", json=chat_request1)
+
+    chat_request2 = {
+        "user_id": user_id,
+        "message": "Conversation 2"
+    }
+    client.post("/chat", json=chat_request2)
+
+    # Get sessions
+    response = client.get(f"/chat/sessions?user_id={user_id}")
+    assert response.status_code == 200
+    conversations = response.json()
+    assert isinstance(conversations, list)
+    assert len(conversations) >= 2
+    for conv in conversations:
+        assert "id" in conv
+        assert "user_id" in conv
+        assert conv["user_id"] == user_id
+        assert "title" in conv
+        assert "created_at" in conv
+        assert "updated_at" in conv
+
+def test_chat_next_task_query():
+    """Test chat responds correctly to next task queries."""
+    # Create a test task
+    task_data = {"title": "Chat Test Task", "description": "For chat testing", "priority": "high"}
+    client.post("/tasks", json=task_data)
+
+    # Ask for next task
+    chat_request = {
+        "user_id": "ronny",
+        "message": "Was ist der nächste Schritt?"
+    }
+    response = client.post("/chat", json=chat_request)
+    assert response.status_code == 201
+    data = response.json()
+    assert "tasks" in data["used_context"]
+    assert "Chat Test Task" in data["reply"] or "nächste" in data["reply"].lower()
+
+def test_chat_status_query():
+    """Test chat responds correctly to status queries."""
+    chat_request = {
+        "user_id": "ronny",
+        "message": "Wie ist der Status?"
+    }
+    response = client.post("/chat", json=chat_request)
+    assert response.status_code == 201
+    data = response.json()
+    assert "tasks" in data["used_context"] or "memory" in data["used_context"]
+    assert "Tasks" in data["reply"] or "status" in data["reply"].lower()
+
+def test_chat_general_query():
+    """Test chat responds to general queries."""
+    chat_request = {
+        "user_id": "ronny",
+        "message": "Hallo, wie geht's?"
+    }
+    response = client.post("/chat", json=chat_request)
+    assert response.status_code == 201
+    data = response.json()
+    assert len(data["reply"]) > 0
+    assert len(data["suggested_actions"]) > 0
