@@ -1,10 +1,19 @@
 import pytest
 import os
+import sqlite3
 from fastapi.testclient import TestClient
 import core.agent_api as api_module
 from core.agent_api import app, init_db
 
 client = TestClient(app)
+
+def _fetch_chat_rows(query, params=()):
+    conn = sqlite3.connect(api_module.CHAT_DB)
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute(query, params).fetchall()
+    finally:
+        conn.close()
 
 @pytest.fixture(scope="module", autouse=True)
 def setup_test_db(tmp_path_factory):
@@ -219,6 +228,26 @@ def test_chat_create_new_conversation():
     assert isinstance(data["suggested_actions"], list)
     assert isinstance(data["used_context"], list)
 
+    conversation_rows = _fetch_chat_rows(
+        "SELECT * FROM conversations WHERE id = ?",
+        (data["conversation_id"],)
+    )
+    assert len(conversation_rows) == 1
+    assert conversation_rows[0]["user_id"] == chat_request["user_id"]
+
+    message_rows = _fetch_chat_rows(
+        """
+        SELECT role, content FROM messages
+        WHERE conversation_id = ?
+        ORDER BY created_at ASC, rowid ASC
+        """,
+        (data["conversation_id"],)
+    )
+    assert len(message_rows) == 2
+    assert [row["role"] for row in message_rows] == ["user", "assistant"]
+    assert message_rows[0]["content"] == chat_request["message"]
+    assert message_rows[1]["content"] == data["reply"]
+
 def test_chat_continue_conversation():
     """Test POST /chat with existing conversation_id appends messages."""
     # Create first message
@@ -240,6 +269,60 @@ def test_chat_continue_conversation():
     assert response2.status_code == 201
     data = response2.json()
     assert data["conversation_id"] == conversation_id
+
+    conversation_rows = _fetch_chat_rows(
+        "SELECT * FROM conversations WHERE id = ?",
+        (conversation_id,)
+    )
+    assert len(conversation_rows) == 1
+
+    message_rows = _fetch_chat_rows(
+        """
+        SELECT role, content FROM messages
+        WHERE conversation_id = ?
+        ORDER BY created_at ASC, rowid ASC
+        """,
+        (conversation_id,)
+    )
+    assert len(message_rows) == 4
+    assert [(row["role"], row["content"]) for row in message_rows] == [
+        ("user", "Hallo!"),
+        ("assistant", response1.json()["reply"]),
+        ("user", "Was ist der Status?"),
+        ("assistant", data["reply"]),
+    ]
+
+def test_chat_continue_missing_conversation_returns_404():
+    """Test POST /chat rejects unknown conversation IDs."""
+    response = client.post("/chat", json={
+        "user_id": "ronny",
+        "message": "Weiter geht's",
+        "conversation_id": "does-not-exist"
+    })
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Conversation not found"
+
+def test_chat_continue_other_users_conversation_returns_404():
+    """Test POST /chat cannot append to another user's conversation."""
+    create_response = client.post("/chat", json={
+        "user_id": "owner",
+        "message": "Private conversation"
+    })
+    conversation_id = create_response.json()["conversation_id"]
+
+    response = client.post("/chat", json={
+        "user_id": "intruder",
+        "message": "Ich hänge mich an",
+        "conversation_id": conversation_id
+    })
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Conversation not found"
+
+    message_rows = _fetch_chat_rows(
+        "SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY created_at ASC, rowid ASC",
+        (conversation_id,)
+    )
+    assert len(message_rows) == 2
 
 def test_chat_history():
     """Test GET /chat/history returns messages in order."""
@@ -339,4 +422,3 @@ def test_chat_general_query():
     data = response.json()
     assert len(data["reply"]) > 0
     assert len(data["suggested_actions"]) > 0
-

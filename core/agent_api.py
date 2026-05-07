@@ -121,6 +121,12 @@ def _parse_message(row: dict) -> dict:
             row["metadata"] = {}
     return row
 
+def _connect_chat_db():
+    """Create a chat database connection with foreign keys enabled."""
+    conn = sqlite3.connect(CHAT_DB)
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
 def _generate_reply(message: str, user_id: str) -> tuple[str, List[str], List[str]]:
     """
     Generate a rule-based reply based on the message content.
@@ -458,18 +464,24 @@ def chat(request: ChatRequest):
     Process a user message and generate a response.
     Creates or updates a conversation and stores messages.
     """
+    conn = None
     try:
-        conn = sqlite3.connect(CHAT_DB)
+        conn = _connect_chat_db()
         cursor = conn.cursor()
         now = datetime.now(timezone.utc).isoformat()
 
         # Create or use existing conversation
         if request.conversation_id:
             conversation_id = request.conversation_id
-            # Update conversation timestamp
             cursor.execute("""
-                UPDATE conversations SET updated_at = ? WHERE id = ?
-            """, (now, conversation_id))
+                SELECT id FROM conversations
+                WHERE id = ? AND user_id = ?
+            """, (conversation_id, request.user_id))
+            if cursor.fetchone() is None:
+                raise HTTPException(status_code=404, detail="Conversation not found")
+            cursor.execute("""
+                UPDATE conversations SET updated_at = ? WHERE id = ? AND user_id = ?
+            """, (now, conversation_id, request.user_id))
         else:
             conversation_id = str(uuid.uuid4())
             # Generate title from first message (first 50 chars)
@@ -481,26 +493,27 @@ def chat(request: ChatRequest):
 
         # Store user message
         user_message_id = str(uuid.uuid4())
+        user_created_at = datetime.now(timezone.utc).isoformat()
         cursor.execute("""
             INSERT INTO messages (id, conversation_id, role, content, created_at, metadata)
             VALUES (?, ?, ?, ?, ?, ?)
-        """, (user_message_id, conversation_id, "user", request.message, now, json.dumps({})))
+        """, (user_message_id, conversation_id, "user", request.message, user_created_at, json.dumps({})))
 
         # Generate reply
         reply, suggested_actions, used_context = _generate_reply(request.message, request.user_id)
 
         # Store assistant message
         assistant_message_id = str(uuid.uuid4())
+        assistant_created_at = datetime.now(timezone.utc).isoformat()
         cursor.execute("""
             INSERT INTO messages (id, conversation_id, role, content, created_at, metadata)
             VALUES (?, ?, ?, ?, ?, ?)
-        """, (assistant_message_id, conversation_id, "assistant", reply, now, json.dumps({
+        """, (assistant_message_id, conversation_id, "assistant", reply, assistant_created_at, json.dumps({
             "suggested_actions": suggested_actions,
             "used_context": used_context
         })))
 
         conn.commit()
-        conn.close()
 
         return ChatResponse(
             conversation_id=conversation_id,
@@ -508,8 +521,13 @@ def chat(request: ChatRequest):
             suggested_actions=suggested_actions,
             used_context=used_context
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chat-Anfrage fehlgeschlagen: {e}")
+    finally:
+        if conn is not None:
+            conn.close()
 
 @app.get("/chat/history", response_model=List[ChatMessage])
 def get_chat_history(conversation_id: str):
@@ -517,12 +535,12 @@ def get_chat_history(conversation_id: str):
     Get all messages from a specific conversation.
     """
     try:
-        conn = sqlite3.connect(CHAT_DB)
+        conn = _connect_chat_db()
         cursor = conn.cursor()
         cursor.execute("""
             SELECT * FROM messages
             WHERE conversation_id = ?
-            ORDER BY created_at ASC
+            ORDER BY created_at ASC, rowid ASC
         """, (conversation_id,))
         columns = [col[0] for col in cursor.description]
         messages = [_parse_message(dict(zip(columns, row))) for row in cursor.fetchall()]
@@ -537,7 +555,7 @@ def get_chat_sessions(user_id: str):
     Get all conversations for a specific user.
     """
     try:
-        conn = sqlite3.connect(CHAT_DB)
+        conn = _connect_chat_db()
         cursor = conn.cursor()
         cursor.execute("""
             SELECT * FROM conversations
