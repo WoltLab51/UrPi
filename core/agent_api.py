@@ -540,7 +540,7 @@ def get_chat_history(conversation_id: str):
         cursor.execute("""
             SELECT * FROM messages
             WHERE conversation_id = ?
-            ORDER BY created_at ASC, rowid ASC
+            ORDER BY created_at ASC
         """, (conversation_id,))
         columns = [col[0] for col in cursor.description]
         messages = [_parse_message(dict(zip(columns, row))) for row in cursor.fetchall()]

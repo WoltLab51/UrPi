@@ -239,7 +239,7 @@ def test_chat_create_new_conversation():
         """
         SELECT role, content FROM messages
         WHERE conversation_id = ?
-        ORDER BY created_at ASC, rowid ASC
+        ORDER BY created_at ASC
         """,
         (data["conversation_id"],)
     )
@@ -280,7 +280,7 @@ def test_chat_continue_conversation():
         """
         SELECT role, content FROM messages
         WHERE conversation_id = ?
-        ORDER BY created_at ASC, rowid ASC
+        ORDER BY created_at ASC
         """,
         (conversation_id,)
     )
@@ -322,7 +322,7 @@ def test_chat_continue_other_users_conversation_returns_404():
         """
         SELECT role, content FROM messages
         WHERE conversation_id = ?
-        ORDER BY created_at ASC, rowid ASC
+        ORDER BY created_at ASC
         """,
         (conversation_id,)
     )
