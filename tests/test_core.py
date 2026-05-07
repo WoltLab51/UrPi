@@ -319,7 +319,11 @@ def test_chat_continue_other_users_conversation_returns_404():
     assert response.json()["detail"] == "Conversation not found"
 
     message_rows = _fetch_chat_rows(
-        "SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY created_at ASC, rowid ASC",
+        """
+        SELECT role, content FROM messages
+        WHERE conversation_id = ?
+        ORDER BY created_at ASC, rowid ASC
+        """,
         (conversation_id,)
     )
     assert len(message_rows) == 2

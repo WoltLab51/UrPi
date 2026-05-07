@@ -494,11 +494,10 @@ def chat(request: ChatRequest):
 
         # Store user message
         user_message_id = str(uuid.uuid4())
-        user_created_at = now
         cursor.execute("""
             INSERT INTO messages (id, conversation_id, role, content, created_at, metadata)
             VALUES (?, ?, ?, ?, ?, ?)
-        """, (user_message_id, conversation_id, "user", request.message, user_created_at, json.dumps({})))
+        """, (user_message_id, conversation_id, "user", request.message, now, json.dumps({})))
 
         # Generate reply
         reply, suggested_actions, used_context = _generate_reply(request.message, request.user_id)
