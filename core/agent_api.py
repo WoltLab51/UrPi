@@ -6,7 +6,7 @@ import json
 import sqlite3
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from .config import TASKS_DB, MEMORY_DB, MODULES_DB, CHAT_DB, DEFAULT_AGENTS
 
 # --- Datenbank-Initialisierung ---
@@ -468,7 +468,8 @@ def chat(request: ChatRequest):
     try:
         conn = _connect_chat_db()
         cursor = conn.cursor()
-        now = datetime.now(timezone.utc).isoformat()
+        request_time = datetime.now(timezone.utc)
+        now = request_time.isoformat()
 
         # Create or use existing conversation
         if request.conversation_id:
@@ -493,7 +494,7 @@ def chat(request: ChatRequest):
 
         # Store user message
         user_message_id = str(uuid.uuid4())
-        user_created_at = datetime.now(timezone.utc).isoformat()
+        user_created_at = now
         cursor.execute("""
             INSERT INTO messages (id, conversation_id, role, content, created_at, metadata)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -504,7 +505,7 @@ def chat(request: ChatRequest):
 
         # Store assistant message
         assistant_message_id = str(uuid.uuid4())
-        assistant_created_at = datetime.now(timezone.utc).isoformat()
+        assistant_created_at = (request_time + timedelta(microseconds=1)).isoformat()
         cursor.execute("""
             INSERT INTO messages (id, conversation_id, role, content, created_at, metadata)
             VALUES (?, ?, ?, ?, ?, ?)
