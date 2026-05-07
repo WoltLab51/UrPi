@@ -8,7 +8,7 @@ from core.agent_api import app, init_db
 client = TestClient(app)
 
 def _fetch_chat_rows(query, params=()):
-    conn = sqlite3.connect(api_module.CHAT_DB)
+    conn = api_module._connect_chat_db()
     conn.row_factory = sqlite3.Row
     try:
         return conn.execute(query, params).fetchall()

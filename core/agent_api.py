@@ -480,8 +480,8 @@ def chat(request: ChatRequest):
             if cursor.fetchone() is None:
                 raise HTTPException(status_code=404, detail="Conversation not found")
             cursor.execute("""
-                UPDATE conversations SET updated_at = ? WHERE id = ? AND user_id = ?
-            """, (now, conversation_id, request.user_id))
+                UPDATE conversations SET updated_at = ? WHERE id = ?
+            """, (now, conversation_id))
         else:
             conversation_id = str(uuid.uuid4())
             # Generate title from first message (first 50 chars)
